@@ -17,7 +17,7 @@ except ImportError:
 
 # If modifying these scopes, delete your previously saved credentials
 # at ~/.credentials/drive-python-quickstart.json
-SCOPES = 'https://www.googleapis.com/auth/drive.metadata.readonly'
+SCOPES = 'https://www.googleapis.com/auth/drive'
 CLIENT_SECRET_FILE = 'client_secret_426774337873-0jm29chokpdr9pm0scnla58ck6g1s0r3.apps.googleusercontent.com.json'
 APPLICATION_NAME = 'Wdrive'
 
@@ -97,14 +97,14 @@ def update(credentials):
     service = apiclient.discovery.build('drive','v3',http=http)
     results = service.files().list().execute()
     items = results.get('files',[])
-    request = service.files().get(fileId="1IBpyvYnXHMHxWqw9X5ulVw-B58HOxzf7Et8h3w0RWdU").execute()
-    print (request)
-    #fh = io.BytesIO()
-    #downloader = apiclient.http.MediaIoBaseDownload(fh, request)
-    #done = False
-    #while done == False:
-    #    status, done = downloader.next_chunk()
-    #    print ("downloaded %d %%." % int(status.progress() * 100))
+    request = service.files().get_media(fileId="0B9lkfT8_oB3fUkc3d003ekJYZ3c")
+    fh = io.FileIO('i.pdf','wb')
+    downloader = apiclient.http.MediaIoBaseDownload(fh, request)
+    done = False
+    while done == False:
+        status, done = downloader.next_chunk()
+        print ("downloaded %d %%." % int(status.progress() * 100))
+    print (fh)
     return
 
 
