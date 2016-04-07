@@ -1,8 +1,10 @@
 from __future__ import print_function
 import httplib2
 import os
+import io
+import apiclient
 
-from apiclient import discovery
+
 import oauth2client
 from oauth2client import client
 from oauth2client import tools
@@ -85,9 +87,27 @@ def initialze():
 
     try:
         http = credentials.authorize(httplib2.Http())
-        service = discovery.build('drive', 'v3', http=http)
+        service = apiclient.discovery.build('drive', 'v3', http=http)
     except httplib2.ServerNotFoundError:
         print ("ServerNotFoundError: Please try again later")
+    update(credentials)
+
+def update(credentials):
+    http = credentials.authorize(httplib2.Http())
+    service = apiclient.discovery.build('drive','v3',http=http)
+    results = service.files().list().execute()
+    items = results.get('files',[])
+    request = service.files().get(fileId="1IBpyvYnXHMHxWqw9X5ulVw-B58HOxzf7Et8h3w0RWdU").execute()
+    print (request)
+    #fh = io.BytesIO()
+    #downloader = apiclient.http.MediaIoBaseDownload(fh, request)
+    #done = False
+    #while done == False:
+    #    status, done = downloader.next_chunk()
+    #    print ("downloaded %d %%." % int(status.progress() * 100))
+    return
+
+
 
 def opt_out(ID):
     config_dir = get_path()
