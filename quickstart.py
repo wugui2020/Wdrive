@@ -132,7 +132,11 @@ class GoogleDriveInstance():
                 file_path = os.path.join(base_path, file['name'])
                 if self.is_google_doc(file):
                     link_file = service.files().get(fileId = file['id'], fields = "webViewLink").execute()
-                    os.symlink(link_file['webViewLink'], file_path)
+                    print (link_file['webViewLink'])
+                    shortcut = open("{0}/{1}.desktop".format(base_path,file['name']),'w')
+                    shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
+                    shortcut.close()
+                    
                 else:
                     request = service.files().get_media(fileId=file['id'])
                     fh = io.FileIO(file_path,'wb')
