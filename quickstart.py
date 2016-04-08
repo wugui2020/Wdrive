@@ -40,11 +40,11 @@ class GoogleDriveInstance():
 
         try:
             http = self.credentials.authorize(httplib2.Http())
-            service = apiclient.discovery.build('drive', 'v3', http=http)
+            self.service = apiclient.discovery.build('drive', 'v3', http=http)
         except httplib2.ServerNotFoundError:
             print ("ServerNotFoundError: Please try again later")
 
-        results = service.files().get(fileId='0B8lhn7ceZT9iYVgzd3lYdE9zSWM').execute()
+        results = self.service.files().get(fileId='0B8lhn7ceZT9iYVgzd3lYdE9zSWM').execute()
         self.download_folder(results,self.local_path + '/Documents')
 
     def get_path(self):
@@ -118,7 +118,7 @@ class GoogleDriveInstance():
             print ("{0}".format(path))
 
     def get_files_by_folder(self, folder):
-        files = service.files().list(q = "'{0}' in parents".format(folder)).execute()
+        files = self.service.files().list(q = "'{0}' in parents".format(folder)).execute()
         files  = files.get(['files'], [])
         return files
 
@@ -133,9 +133,7 @@ class GoogleDriveInstance():
 
     def download_folder(self, folder, base_path = "./"):
         self.makedir_from_path(base_path)
-        http = self.credentials.authorize(httplib2.Http())
-        service = apiclient.discovery.build('drive','v3',http=http)
-        results = service.files().list(q="'{0}' in parents".format(folder['id'])).execute()
+        results = self.service.files().list(q="'{0}' in parents".format(folder['id'])).execute()
         while True:
             file_list = results.get('files',[])
             for file in file_list:
@@ -146,12 +144,12 @@ class GoogleDriveInstance():
                 else:
                     file_path = os.path.join(base_path, file['name'])
                     if self.is_google_doc(file):
-                        link_file = service.files().get(fileId = file['id'], fields = "webViewLink").execute()
+                        link_file = self.service.files().get(fileId = file['id'], fields = "webViewLink").execute()
                         with open("{0}/{1}.desktop".format(base_path,file['name']),'w') as shortcut:
                             shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
                         
                     else:
-                        request = service.files().get_media(fileId=file['id'])
+                        request = self.service.files().get_media(fileId=file['id'])
                         fh = io.FileIO(file_path,'wb')
                         downloader = apiclient.http.MediaIoBaseDownload(fh, request)
                         done = False
@@ -160,7 +158,7 @@ class GoogleDriveInstance():
                             print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
                         fh.close()
             if 'nextPageToken' in results:
-                 results = service.files().list(pageToken = results['nextPageToken']).execute()
+                 results = self.service.files().list(pageToken = results['nextPageToken']).execute()
             else:
                 break
         return
