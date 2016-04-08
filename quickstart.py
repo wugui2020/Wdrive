@@ -22,7 +22,7 @@ SCOPES = 'https://www.googleapis.com/auth/drive'
 CLIENT_SECRET_FILE = 'client_secret_426774337873-0jm29chokpdr9pm0scnla58ck6g1s0r3.apps.googleusercontent.com.json'
 APPLICATION_NAME = 'Wdrive'
 
-class GoogleDriveSession():
+class GoogleDriveInstance():
 
     def __init__(self, argv):
         """Get the credentials and set the parameters for sync"""
@@ -34,13 +34,16 @@ class GoogleDriveSession():
             os.makedirs(self.local_path)
         self.credentials = self.get_credentials()
         self.opt_list = self.get_configs()
-
+        
 
         try:
             http = self.credentials.authorize(httplib2.Http())
             service = apiclient.discovery.build('drive', 'v3', http=http)
         except httplib2.ServerNotFoundError:
             print ("ServerNotFoundError: Please try again later")
+
+        results = service.files().get(fileId='0B8lhn7ceZT9iYVgzd3lYdE9zSWM').execute()
+        self.download_folder(results,self.local_path + '/Documents')
 
 
     def get_path(self):
@@ -93,39 +96,52 @@ class GoogleDriveSession():
 
         return OPTOUTLIST
 
+    def makedir_from_path(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+            print ("{0}".format(path))
 
-    def update(LOCALPATH, credentials):
-        http = credentials.authorize(httplib2.Http())
-        service = apiclient.discovery.build('drive','v3',http=http)
-        results = service.files().list(q='mimeType = "application/pdf"').execute()
-        items = results.get('files',[])
-        for item in items:
-            request = service.files().get_media(fileId=item['id'])
-            item_path = os.path.join(LOCALPATH, item['name'])
-            fh = io.FileIO(item_path,'wb')
-            downloader = apiclient.http.MediaIoBaseDownload(fh, request)
-            done = False
-            while done == False:
-                status, done = downloader.next_chunk()
-                print ("File {0} downloaded {1} %.".format( item['name'] ,int(status.progress() * 100)))
-            fh.close()
+    def get_files_by_folder(self, folder):
+        files = service.files().list(q = "'{0}' in parents".format(folder)).execute()
+        files  = files.get(['files'], [])
+        return files
+
+    def get_items_by_id(self, fileId):
         return
 
-    def download_file(LOCALPATH, credentials):
-        http = credentials.authorize(httplib2.Http())
+    def is_folder(self, file):
+        return file['mimeType'] == 'application/vnd.google-apps.folder'
+
+    def is_google_doc(self, file):
+        return file['mimeType'][0:27] == "application/vnd.google-apps" 
+
+    def start(self):
+        self.download('root')
+
+    def download_folder(self, folder, base_path = "./"):
+        self.makedir_from_path(base_path)
+        http = self.credentials.authorize(httplib2.Http())
         service = apiclient.discovery.build('drive','v3',http=http)
-        results = service.files().list(q='mimeType = "application/pdf"').execute()
-        items = results.get('files',[])
-        for item in items:
-            request = service.files().get_media(fileId=item['id'])
-            item_path = os.path.join(LOCALPATH, item['name'])
-            fh = io.FileIO(item_path,'wb')
-            downloader = apiclient.http.MediaIoBaseDownload(fh, request)
-            done = False
-            while done == False:
-                status, done = downloader.next_chunk()
-                print ("File {0} downloaded {1} %%.".format( item['name'] ,int(status.progress() * 100)))
-            fh.close()
+        results = service.files().list(q="'{0}' in parents".format(folder['id'])).execute()
+
+        file_list = results.get('files',[])
+        for file in file_list:
+            if self.is_folder(file):
+                self.download_folder(file, base_path + '/{0}'.format(file['name']))
+            else:
+                file_path = os.path.join(base_path, file['name'])
+                if self.is_google_doc(file):
+                    link_file = service.files().get(fileId = file['id'], fields = "webViewLink").execute()
+                    os.symlink(link_file['webViewLink'], file_path)
+                else:
+                    request = service.files().get_media(fileId=file['id'])
+                    fh = io.FileIO(file_path,'wb')
+                    downloader = apiclient.http.MediaIoBaseDownload(fh, request)
+                    done = False
+                    while done == False:
+                        status, done = downloader.next_chunk()
+                        print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
+                    fh.close()
         return
 
 
@@ -142,4 +158,4 @@ class GoogleDriveSession():
         return True
 
 if __name__ == '__main__':
-    GoogleDriveSession(sys.argv)
+    drive = GoogleDriveInstance(sys.argv)
