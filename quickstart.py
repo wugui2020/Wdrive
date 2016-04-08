@@ -46,7 +46,6 @@ class GoogleDriveInstance():
 
         results = service.files().get(fileId='0B8lhn7ceZT9iYVgzd3lYdE9zSWM').execute()
         self.download_folder(results,self.local_path + '/Documents')
-        print (self.opt_list)
 
     def get_path(self):
         home_dir = os.path.expanduser('~')
@@ -132,37 +131,38 @@ class GoogleDriveInstance():
     def is_google_doc(self, file):
         return file['mimeType'][0:27] == "application/vnd.google-apps" 
 
-    def start(self):
-        self.download('root')
-
     def download_folder(self, folder, base_path = "./"):
         self.makedir_from_path(base_path)
         http = self.credentials.authorize(httplib2.Http())
         service = apiclient.discovery.build('drive','v3',http=http)
-        results = service.files().list(q="'{0}' in parents".format(folder['id']), pageSize = 5).execute()
-
-        file_list = results.get('files',[])
-        for file in file_list:
-            if file['id'] in self.opt_list:
-                continue
-            if self.is_folder(file):
-                self.download_folder(file, base_path + '/{0}'.format(file['name']))
-            else:
-                file_path = os.path.join(base_path, file['name'])
-                if self.is_google_doc(file):
-                    link_file = service.files().get(fileId = file['id'], fields = "webViewLink").execute()
-                    with open("{0}/{1}.desktop".format(base_path,file['name']),'w') as shortcut:
-                        shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
-                    
+        results = service.files().list(q="'{0}' in parents".format(folder['id'])).execute()
+        while True:
+            file_list = results.get('files',[])
+            for file in file_list:
+                if file['id'] in self.opt_list:
+                    continue
+                if self.is_folder(file):
+                    self.download_folder(file, base_path + '/{0}'.format(file['name']))
                 else:
-                    request = service.files().get_media(fileId=file['id'])
-                    fh = io.FileIO(file_path,'wb')
-                    downloader = apiclient.http.MediaIoBaseDownload(fh, request)
-                    done = False
-                    while done == False:
-                        status, done = downloader.next_chunk()
-                        print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
-                    fh.close()
+                    file_path = os.path.join(base_path, file['name'])
+                    if self.is_google_doc(file):
+                        link_file = service.files().get(fileId = file['id'], fields = "webViewLink").execute()
+                        with open("{0}/{1}.desktop".format(base_path,file['name']),'w') as shortcut:
+                            shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
+                        
+                    else:
+                        request = service.files().get_media(fileId=file['id'])
+                        fh = io.FileIO(file_path,'wb')
+                        downloader = apiclient.http.MediaIoBaseDownload(fh, request)
+                        done = False
+                        while done == False:
+                            status, done = downloader.next_chunk()
+                            print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
+                        fh.close()
+            if 'nextPageToken' in results:
+                 results = service.files().list(pageToken = results['nextPageToken']).execute()
+            else:
+                break
         return
 
 
