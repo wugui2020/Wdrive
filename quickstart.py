@@ -4,6 +4,7 @@ import httplib2
 import os
 import io
 import apiclient
+from ast import literal_eval
 
 
 import oauth2client
@@ -35,6 +36,7 @@ class GoogleDriveInstance():
         self.credentials = self.get_credentials()
         self.opt_list = self.get_configs()
         
+        
 
         try:
             http = self.credentials.authorize(httplib2.Http())
@@ -44,7 +46,7 @@ class GoogleDriveInstance():
 
         results = service.files().get(fileId='0B8lhn7ceZT9iYVgzd3lYdE9zSWM').execute()
         self.download_folder(results,self.local_path + '/Documents')
-
+        print (self.opt_list)
 
     def get_path(self):
         home_dir = os.path.expanduser('~')
@@ -85,16 +87,31 @@ class GoogleDriveInstance():
                                        'Wdrive.cfg')
         try:
             config = open(config_path, 'r')
-            OPTOUTLIST = config.readline().split(',')
+            s = config.readline()
+            OPTOUTLIST = s.split(",")
         except IOError:
             config = open(config_path, 'w')
             OPTOUTLIST = []
-            config.write(",".join(map(str,OPTOUTLIST)))
+            config.write(",".join(OPTOUTLIST))
             print ("New profile established. Please use\n\t\twdrive ignore\nto opt out folders you don't want to be synced.")
         
         config.close()
 
         return OPTOUTLIST
+
+    def opt_out(self,ID):
+        config_dir = self.get_path()
+        config_path = os.path.join(config_dir,
+                                       'Wdrive.cfg')
+        config = open(config_path, 'r+b')
+        s = config.readline()
+        OPTOUTLIST = s.split(",")
+        OPTOUTLIST.append(ID)
+        self.opt_list = OPTOUTLIST
+        if ID not in self.opt_list:
+            config.write(","+ID)
+        config.close()
+        return True
 
     def makedir_from_path(self, path):
         if not os.path.exists(path):
@@ -122,20 +139,20 @@ class GoogleDriveInstance():
         self.makedir_from_path(base_path)
         http = self.credentials.authorize(httplib2.Http())
         service = apiclient.discovery.build('drive','v3',http=http)
-        results = service.files().list(q="'{0}' in parents".format(folder['id'])).execute()
+        results = service.files().list(q="'{0}' in parents".format(folder['id']), pageSize = 5).execute()
 
         file_list = results.get('files',[])
         for file in file_list:
+            if file['id'] in self.opt_list:
+                continue
             if self.is_folder(file):
                 self.download_folder(file, base_path + '/{0}'.format(file['name']))
             else:
                 file_path = os.path.join(base_path, file['name'])
                 if self.is_google_doc(file):
                     link_file = service.files().get(fileId = file['id'], fields = "webViewLink").execute()
-                    print (link_file['webViewLink'])
-                    shortcut = open("{0}/{1}.desktop".format(base_path,file['name']),'w')
-                    shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
-                    shortcut.close()
+                    with open("{0}/{1}.desktop".format(base_path,file['name']),'w') as shortcut:
+                        shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
                     
                 else:
                     request = service.files().get_media(fileId=file['id'])
@@ -150,16 +167,7 @@ class GoogleDriveInstance():
 
 
 
-    def opt_out(ID):
-        config_dir = get_path()
-        config_path = os.path.join(config_dir,
-                                       'Wdrive.cfg')
-        config = open(config_path, 'r')
-        OPTOUTLIST = config.readline().split(',')
-        OPTOUTLIST.append(ID)
-        config.write(",".join(map(str,OPTOUTLIST)))
-        config.close()
-        return True
+
 
 if __name__ == '__main__':
     drive = GoogleDriveInstance(sys.argv)
