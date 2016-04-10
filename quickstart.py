@@ -34,8 +34,7 @@ class GoogleDriveInstance():
         if not os.path.exists(self.local_path):
             os.makedirs(self.local_path)
         self.credentials = self.get_credentials()
-        self.opt_list = self.get_configs()
-        
+        self.opt_list, self.change_page_token = self.get_configs()
         
 
         try:
@@ -44,8 +43,9 @@ class GoogleDriveInstance():
         except httplib2.ServerNotFoundError:
             print ("ServerNotFoundError: Please try again later")
 
-        results = self.service.files().get(fileId='0B8lhn7ceZT9iYVgzd3lYdE9zSWM').execute()
-        self.download_folder(results,self.local_path + '/Documents')
+#        results = self.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs').execute()
+#        self.download_folder(results,self.local_path + '/test')
+        self.detect_changes()
 
     def get_path(self):
         home_dir = os.path.expanduser('~')
@@ -86,31 +86,51 @@ class GoogleDriveInstance():
                                        'Wdrive.cfg')
         try:
             config = open(config_path, 'r')
-            s = config.readline()
+            s = config.readline().strip()
             OPTOUTLIST = s.split(",")
+            s = config.readline().strip()
+            if s != '':
+                change_page_token = int(s)
+            else:
+                change_page_token = None
         except IOError:
             config = open(config_path, 'w')
             OPTOUTLIST = []
-            config.write(",".join(OPTOUTLIST))
+            change_page_token = None
+            config.write(",".join(OPTOUTLIST)+'\n'+str(change_page_token))
             print ("New profile established. Please use\n\t\twdrive ignore\nto opt out folders you don't want to be synced.")
         
         config.close()
 
-        return OPTOUTLIST
+        return OPTOUTLIST, change_page_token
 
-    def opt_out(self,ID):
+    def update_configs(self):
+        print ("update cfg")
         config_dir = self.get_path()
         config_path = os.path.join(config_dir,
                                        'Wdrive.cfg')
-        config = open(config_path, 'r+b')
-        s = config.readline()
-        OPTOUTLIST = s.split(",")
-        OPTOUTLIST.append(ID)
-        self.opt_list = OPTOUTLIST
-        if ID not in self.opt_list:
-            config.write(","+ID)
+        config = open(config_path, 'w')
+        OPTOUTLIST = self.opt_list
+        print (self.opt_list)
+        change_page_token = self.change_page_token
+        print (self.change_page_token)
+        config.write(",".join(OPTOUTLIST)+'\n'+str(change_page_token))
+        
         config.close()
+
+
+    def opt_out(self,ID):
+        if ID not in self.opt_list:
+            self.opt_list.append(ID)
+            self.update_configs()
         return True
+
+    def opt_in(self,ID):
+        if ID in self.opt_list:
+            self.opt_list.pop(self.opt_list.index(ID))
+            self.update_configs()
+        return True
+
 
     def makedir_from_path(self, path):
         if not os.path.exists(path):
@@ -162,6 +182,27 @@ class GoogleDriveInstance():
             else:
                 break
         return
+
+    def detect_changes(self):
+        print (self.change_page_token)
+        if self.change_page_token == None:
+            response = self.service.changes().getStartPageToken().execute()
+            self.change_page_token = response.get('startPageToken')
+        page_token = self.change_page_token
+        while page_token != None:
+            response = self.service.changes().list(
+                    pageToken = page_token,
+                    spaces='drive'
+                    ).execute()
+            print (self.change_page_token)
+            print (response)
+            for change in response.get('changes'):
+                print ("change found for file.{0}".format(change.get('fileId')))
+            if 'newStartPageToken' in response:
+                self.change_page_token = response.get('newStartPageToken')
+            page_token = response.get('nextPageToken')
+        self.update_configs()
+
 
 
 
