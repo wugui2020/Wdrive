@@ -4,6 +4,7 @@ import httplib2
 import os
 import io
 import apiclient
+import time
 from ast import literal_eval
 
 
@@ -34,8 +35,7 @@ class GoogleDriveInstance():
         if not os.path.exists(self.local_path):
             os.makedirs(self.local_path)
         self.credentials = self.get_credentials()
-        self.opt_list, self.change_page_token = self.get_configs()
-        self.last_check_time = 1460383545939
+        self.opt_list, self.change_page_token,self.last_check_time = self.get_configs()
         
 
         try:
@@ -95,29 +95,30 @@ class GoogleDriveInstance():
                 change_page_token = int(s)
             else:
                 change_page_token = None
+            s = config.readline().strip()
+            last_check_time = int(s)
+
         except IOError:
             config = open(config_path, 'w')
             OPTOUTLIST = []
             change_page_token = None
-            config.write(",".join(OPTOUTLIST)+'\n'+str(change_page_token))
+            last_check_time = int(round(time.time()*1000))
+            config.write(",".join(OPTOUTLIST)+'\n'+str(change_page_token)+'\n'+str(last_check_time))
             print ("New profile established. Please use\n\t\twdrive ignore\nto opt out folders you don't want to be synced.")
         
         config.close()
 
-        return OPTOUTLIST, change_page_token
+        return OPTOUTLIST, change_page_token, last_check_time
 
     def update_configs(self):
-        print ("update cfg")
         config_dir = self.get_path()
         config_path = os.path.join(config_dir,
                                        'Wdrive.cfg')
         config = open(config_path, 'w')
         OPTOUTLIST = self.opt_list
-        print (self.opt_list)
         change_page_token = self.change_page_token
-        print (self.change_page_token)
-        config.write(",".join(OPTOUTLIST)+'\n'+str(change_page_token))
-        
+        last_check_time = self.last_check_time
+        config.write(",".join(OPTOUTLIST)+'\n'+str(change_page_token)+'\n'+str(last_check_time))
         config.close()
 
 
@@ -196,26 +197,44 @@ class GoogleDriveInstance():
                 pageSize=10
                 ).execute()
         activities = results.get('activities', [])
-        if not activities:
-            print('No activity.')
-        else:
-            print('Recent activity:')
-            for activity in activities:
-                event = activity['combinedEvent']
-                time = int(event['eventTimeMillis'])
-                if time <= self.last_check_time:
-                    break
-                user = event.get('user', None)
-                target = event.get('target', None)
-                if user == None or target == None:
-                    continue
-                print('{0}: {1}, {2}, {3} ({4})'.format(
-                    time, 
-                    user['name'],
-                    event['primaryEventType'], 
-                    target['name'], 
-                    target['mimeType']
-                    ))
+        last_check_time = self.last_check_time
+        self.last_check_time = activities[0]['combinedEvent']['eventTimeMillis']
+        self.update_configs()
+
+        while True:
+            if not activities:
+                print('No activity since the last check.')
+            else:
+                print('Activities since the last check:')
+                for activity in activities:
+                    event = activity['combinedEvent']
+                    eventTime = int(event['eventTimeMillis'])
+                    if eventTime <= last_check_time:
+                        return
+                    user = event.get('user', None)
+                    target = event.get('target', None)
+                    if user == None or target == None:
+                        continue
+                    print('{0}: {1}, {2}, {3} ({4})'.format(
+                        eventTime, 
+                        user['name'],
+                        event['primaryEventType'], 
+                        target['name'], 
+                        target['mimeType']
+                        ))
+                    self.handle_activity(activity)
+            if 'nextPageToken' in results:
+                results = service.activities().list(
+                        source='drive.google.com',
+                        drive_ancestorId='root', 
+                        pageToken=results['nextPageToken'],
+                        pageSize=10
+                        ).execute()
+                activities = results.get('activities', [])
+            else:
+                break
+
+    def handle_activity(self, activity):
         return
 
     def detect_changes(self):
