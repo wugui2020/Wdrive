@@ -31,7 +31,7 @@ class GoogleDriveInstance():
         """local_path:  (String) The directory that will be local Google Drive folder."""
         """opt_list: (List) The list of IDs that will not be synced with the cloud."""
 
-        self.local_path = os.getcwd()+"/googledrive"
+        self.local_path = os.getcwd()+"/googledrive/"
         if not os.path.exists(self.local_path):
             os.makedirs(self.local_path)
         self.credentials = self.get_credentials()
@@ -47,6 +47,7 @@ class GoogleDriveInstance():
 #        results = self.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs').execute()
 #        self.download_folder(results,self.local_path + '/test')
 #        self.detect_changes()
+        
         self.detect_acticities()
 
     def get_path(self):
@@ -55,6 +56,25 @@ class GoogleDriveInstance():
         if not os.path.exists(profile_dir):
             os.makedirs(profile_dir)
         return profile_dir
+
+    def get_file_path(self, fileId):
+        base_path = self.local_path
+        extend_path = []
+        #root_response = self.service.files().list(q = "'root' in parents").execute()
+        #root_fileId = response['files']['id'] 
+        #root_file = self.service.files().get(fileId = root_fileId).execute()
+        #rootId = root_file['parents']
+        item = self.service.files().get(fileId = fileId, fields = 'name, parents').execute()
+
+        while True:
+            fileId = item['parents'][0]
+            item = self.service.files().get(fileId = fileId, fields = 'name, parents').execute()
+            if 'parents' not in item:
+                break
+            extend_path.append(item['name'])
+        extend_path.reverse()
+
+        return base_path + "/".join(extend_path)
 
 
     def get_credentials(self):
@@ -145,9 +165,6 @@ class GoogleDriveInstance():
         files  = files.get(['files'], [])
         return files
 
-    def get_items_by_id(self, fileId):
-        return
-
     def is_folder(self, file):
         return file['mimeType'] == 'application/vnd.google-apps.folder'
 
@@ -193,6 +210,7 @@ class GoogleDriveInstance():
         service = apiclient.discovery.build('appsactivity','v1', http = self.http)
         results = service.activities().list(
                 source='drive.google.com',
+                groupingStrategy='driveUi',
                 drive_ancestorId='root', 
                 pageSize=10
                 ).execute()
@@ -203,26 +221,27 @@ class GoogleDriveInstance():
 
         while True:
             if not activities:
-                print('No activity since the last check.')
+                print('No activity.')
             else:
                 print('Activities since the last check:')
                 for activity in activities:
-                    event = activity['combinedEvent']
-                    eventTime = int(event['eventTimeMillis'])
-                    if eventTime <= last_check_time:
-                        return
-                    user = event.get('user', None)
-                    target = event.get('target', None)
-                    if user == None or target == None:
-                        continue
-                    print('{0}: {1}, {2}, {3} ({4})'.format(
-                        eventTime, 
-                        user['name'],
-                        event['primaryEventType'], 
-                        target['name'], 
-                        target['mimeType']
-                        ))
-                    self.handle_activity(activity)
+                    events = activity['singleEvents']
+                    for event in events:
+                        eventTime = int(event['eventTimeMillis'])
+                        if eventTime <= last_check_time:
+                            return
+                        user = event.get('user', None)
+                        target = event.get('target', None)
+                        if self.is_google_doc(target) == True:
+                            continue
+                        print('{0}: {1}, {2}, {3} ({4})'.format(
+                            eventTime, 
+                            user['name'],
+                            event['primaryEventType'], 
+                            target['name'], 
+                            target['mimeType']
+                            ))
+                        #self.handle_event(event)
             if 'nextPageToken' in results:
                 results = service.activities().list(
                         source='drive.google.com',
@@ -234,7 +253,17 @@ class GoogleDriveInstance():
             else:
                 break
 
-    def handle_activity(self, activity):
+    def handle_event(self, event):
+        eventType = event['primaryEventType']
+        fileId = event['target']['id']
+        if eventType == 'trash':
+            pass
+        elif eventType == 'create':
+            path = self.get_file_path(fileId)
+            self.download_file(file, path)
+        elif eventType == 'rename':
+            path = self.get_file_path(fileId)
+            os.rename(path + event['oldTitle'], path + event['newTitle'])
         return
 
     def detect_changes(self):
@@ -261,7 +290,7 @@ class GoogleDriveInstance():
                     print (self.is_folder(file))
                     if self.is_folder(file) == True:
                         print (file['name'])
-                    #path = self.get_path(file)
+                    #path = self.get_file_path(fileId)
                     #self.download_file(file, path)
             if 'newStartPageToken' in response:
                 self.change_page_token = response.get('newStartPageToken')
