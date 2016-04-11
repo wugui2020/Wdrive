@@ -19,7 +19,7 @@ except ImportError:
 
 # If modifying these scopes, delete your previously saved credentials
 # at ~/.credentials/drive-python-quickstart.json
-SCOPES = 'https://www.googleapis.com/auth/drive'
+SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/activity'
 CLIENT_SECRET_FILE = 'client_secret_426774337873-0jm29chokpdr9pm0scnla58ck6g1s0r3.apps.googleusercontent.com.json'
 APPLICATION_NAME = 'Wdrive'
 
@@ -35,17 +35,19 @@ class GoogleDriveInstance():
             os.makedirs(self.local_path)
         self.credentials = self.get_credentials()
         self.opt_list, self.change_page_token = self.get_configs()
+        self.last_check_time = 1460383545939
         
 
         try:
-            http = self.credentials.authorize(httplib2.Http())
-            self.service = apiclient.discovery.build('drive', 'v3', http=http)
+            self.http = self.credentials.authorize(httplib2.Http())
+            self.service = apiclient.discovery.build('drive', 'v3', http=self.http)
         except httplib2.ServerNotFoundError:
             print ("ServerNotFoundError: Please try again later")
 
 #        results = self.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs').execute()
 #        self.download_folder(results,self.local_path + '/test')
-        self.detect_changes()
+#        self.detect_changes()
+        self.detect_acticities()
 
     def get_path(self):
         home_dir = os.path.expanduser('~')
@@ -89,7 +91,7 @@ class GoogleDriveInstance():
             s = config.readline().strip()
             OPTOUTLIST = s.split(",")
             s = config.readline().strip()
-            if s != '':
+            if s != '' and s != 'None':
                 change_page_token = int(s)
             else:
                 change_page_token = None
@@ -149,7 +151,27 @@ class GoogleDriveInstance():
         return file['mimeType'] == 'application/vnd.google-apps.folder'
 
     def is_google_doc(self, file):
-        return file['mimeType'][0:27] == "application/vnd.google-apps" 
+        return file['mimeType'] in ["application/vnd.google-apps.document","application/vnd.google-apps.presentation","application/vnd.google-apps.script","application/vnd.google-apps.spreadsheet","application/vnd.google-apps.form","application/vnd.google-apps.drawing","application/vnd.google-apps.map","application/vnd.google-apps.sites"] 
+
+    def download_file(self, file, base_path = "./"):
+        if self.is_folder(file):
+            self.download_folder(file, base_path + '/{0}'.format(file['name']))
+        else:
+            file_path = os.path.join(base_path, file['name'])
+            if self.is_google_doc(file):
+                link_file = self.service.files().get(fileId = file['id'], fields = "webViewLink").execute()
+                with open("{0}/{1}.desktop".format(base_path,file['name']),'w') as shortcut:
+                    shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
+                
+            else:
+                request = self.service.files().get_media(fileId=file['id'])
+                fh = io.FileIO(file_path,'wb')
+                downloader = apiclient.http.MediaIoBaseDownload(fh, request)
+                done = False
+                while done == False:
+                    status, done = downloader.next_chunk()
+                    print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
+                fh.close()
 
     def download_folder(self, folder, base_path = "./"):
         self.makedir_from_path(base_path)
@@ -158,29 +180,42 @@ class GoogleDriveInstance():
             file_list = results.get('files',[])
             for file in file_list:
                 if file['id'] in self.opt_list:
-                    continue
-                if self.is_folder(file):
-                    self.download_folder(file, base_path + '/{0}'.format(file['name']))
-                else:
-                    file_path = os.path.join(base_path, file['name'])
-                    if self.is_google_doc(file):
-                        link_file = self.service.files().get(fileId = file['id'], fields = "webViewLink").execute()
-                        with open("{0}/{1}.desktop".format(base_path,file['name']),'w') as shortcut:
-                            shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
-                        
-                    else:
-                        request = self.service.files().get_media(fileId=file['id'])
-                        fh = io.FileIO(file_path,'wb')
-                        downloader = apiclient.http.MediaIoBaseDownload(fh, request)
-                        done = False
-                        while done == False:
-                            status, done = downloader.next_chunk()
-                            print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
-                        fh.close()
+                    return
+                self.download_file(file)
             if 'nextPageToken' in results:
                  results = self.service.files().list(pageToken = results['nextPageToken']).execute()
             else:
                 break
+        return
+
+    def detect_acticities(self):
+        service = apiclient.discovery.build('appsactivity','v1', http = self.http)
+        results = service.activities().list(
+                source='drive.google.com',
+                drive_ancestorId='root', 
+                pageSize=10
+                ).execute()
+        activities = results.get('activities', [])
+        if not activities:
+            print('No activity.')
+        else:
+            print('Recent activity:')
+            for activity in activities:
+                event = activity['combinedEvent']
+                time = int(event['eventTimeMillis'])
+                if time <= self.last_check_time:
+                    break
+                user = event.get('user', None)
+                target = event.get('target', None)
+                if user == None or target == None:
+                    continue
+                print('{0}: {1}, {2}, {3} ({4})'.format(
+                    time, 
+                    user['name'],
+                    event['primaryEventType'], 
+                    target['name'], 
+                    target['mimeType']
+                    ))
         return
 
     def detect_changes(self):
@@ -195,9 +230,20 @@ class GoogleDriveInstance():
                     spaces='drive'
                     ).execute()
             print (self.change_page_token)
-            print (response)
+            print (response.get('changes'))
             for change in response.get('changes'):
-                print ("change found for file.{0}".format(change.get('fileId')))
+                fileId = change.get('fileId')
+                if fileId in self.opt_list:
+                    continue
+                file = self.service.files().get(fileId = fileId, fields = "id,name,mimeType,parents").execute()
+                print (file)
+                if self.is_google_doc(file) == False and 'parents' in file:
+                    print ("{0}".format(file['id']))
+                    print (self.is_folder(file))
+                    if self.is_folder(file) == True:
+                        print (file['name'])
+                    #path = self.get_path(file)
+                    #self.download_file(file, path)
             if 'newStartPageToken' in response:
                 self.change_page_token = response.get('newStartPageToken')
             page_token = response.get('nextPageToken')
