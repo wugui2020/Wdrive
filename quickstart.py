@@ -19,25 +19,36 @@ try:
 except ImportError:
     flags = None
 
-# If modifying these scopes, delete your previously saved credentials
-# at ~/.credentials/drive-python-quickstart.json
 SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/activity'
 CLIENT_SECRET_FILE = 'client_secret_426774337873-0jm29chokpdr9pm0scnla58ck6g1s0r3.apps.googleusercontent.com.json'
 APPLICATION_NAME = 'Wdrive'
 
+"""
+=========================
+  Google Drive Instance
+=========================
+"""
+
+
 class GoogleDriveInstance():
 
     def __init__(self, argv):
-        """Get the credentials and set the parameters for sync"""
-        """local_path:  (String) The directory that will be local Google Drive folder."""
+        """Get the credentials, setup the database and set the parameters for sync"""
+	"""credentials: (Object) The credential interface from Drive API"""
+        """index_database: (Object) The database for file indexing."""
+	"""local_path:  (String) The directory that will be local Google Drive folder."""
         """opt_list: (List) The list of IDs that will not be synced with the cloud."""
+	"""change_page_token: (String) The string for Drive change queries."""
+	"""last_check_time: (Integer) Time when the last change happened in milisec from epoc."""
+	
 
         self.local_path = os.getcwd()+"/googledrive/"
         if not os.path.exists(self.local_path):
             os.makedirs(self.local_path)
         self.credentials = self.get_credentials()
-        self.index_database = sqlite3.connect('./.database/drive.db')
+        self.index_database = sqlite3.connect('./drive.db')
         self.database_cursor = self.index_database.cursor()
+
         self.opt_list, self.change_page_token,self.last_check_time = self.get_configs()
         
 
@@ -47,18 +58,32 @@ class GoogleDriveInstance():
         except httplib2.ServerNotFoundError:
             print ("ServerNotFoundError: Please try again later")
 
-#        results = self.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs').execute()
-#        self.download_folder(results,self.local_path + '/test')
-#        self.detect_changes()
-        
-        self.detect_acticities()
-        
-    def get_file_from_db(self, fileId):
-        results = self.database_cursor.execute(
-                "SELECT * FROM files WHERE fileId =?", fileId)
-        for row in results:
-            return GoogleDriveInstance(row)
+        for name in self.database_cursor.execute(
+                """SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name = 'files'"""):
+            return
+            self.database_cursor.execute(
+                    """DROP TABLE files
+                    """)
 
+        self.database_cursor.execute(
+                """CREATE TABLE files
+                (
+                fileId text,
+                name text,
+                path text,
+                UNIQUE (fileId)
+                )""")
+        self.index_database.commit()
+
+
+    """
+    ===============================
+	Drive Instace Operations
+    ===============================
+    """
+    
 
     def get_path(self):
         home_dir = os.path.expanduser('~')
@@ -67,26 +92,12 @@ class GoogleDriveInstance():
             os.makedirs(profile_dir)
         return profile_dir
 
-    def get_file_path(self, fileId):
-        base_path = self.local_path
-        extend_path = []
-        #root_response = self.service.files().list(q = "'root' in parents").execute()
-        #root_fileId = response['files']['id'] 
-        #root_file = self.service.files().get(fileId = root_fileId).execute()
-        #rootId = root_file['parents']
-        item = self.service.files().get(fileId = fileId, fields = 'name, parents').execute()
 
-        while True:
-            fileId = item['parents'][0]
-            item = self.service.files().get(fileId = fileId, fields = 'name, parents').execute()
-            if 'parents' not in item:
-                break
-            extend_path.append(item['name'])
-        extend_path.reverse()
-
-        return base_path + "/".join(extend_path)
-
-
+    def makedir_from_path(self, path):
+        if not os.path.exists(path):
+            os.makedirs(path)
+            print ("{0}".format(path))
+        
     def get_credentials(self):
         """Gets valid user credentials from storage.
 
@@ -165,37 +176,95 @@ class GoogleDriveInstance():
         return True
 
 
-    def makedir_from_path(self, path):
-        if not os.path.exists(path):
-            os.makedirs(path)
-            print ("{0}".format(path))
 
-    def get_files_by_folder(self, folder):
-        files = self.service.files().list(q = "'{0}' in parents".format(folder)).execute()
-        files  = files.get(['files'], [])
-        return files
+    def detect_changes(self):
+        if self.change_page_token == None:
+            response = self.service.changes().getStartPageToken().execute()
+            self.change_page_token = response.get('startPageToken')
+        page_token = self.change_page_token
+        while page_token != None:
+            response = self.service.changes().list(
+                    pageToken = page_token,
+                    spaces='drive'
+                    ).execute()
+            for change in response.get('changes'):
+                fileId = change.get('fileId')
+                if fileId in self.opt_list:
+                    continue
+                file = self.service.files().get(fileId = fileId, fields = "id,name,mimeType,parents").execute()
+                if self.is_google_doc(file) == False and 'parents' in file: 
+		    # 'parents in file means it's in your drive'
+                    if self.is_folder(file) == True:
+                        print (file['name'])
+                    #path = self.get_file_path(fileId)
+                    #self.download_file(file, path)
+            if 'newStartPageToken' in response:
+                self.change_page_token = response.get('newStartPageToken')
+            page_token = response.get('nextPageToken')
+        self.update_configs()
+
+    def log_database(self, file, path):
+        self.database_cursor.execute(
+                """
+                INSERT INTO files 
+                VALUES(?,?,?) 
+                """
+                ,(file['id'], file['name'], path))
+        self.index_database.commit()
+        return
+
+    def list_database_files(self):
+        results = self.database_cursor.execute(
+                """
+                SELECT * FROM files
+                """)
+        for row in results:
+            print (row)
+
+    """
+    ==============================
+          File Operations
+    ==============================
+    """
+        
+    def query_file_via_fileId(self, fileId = None):
+	if fileId == None:
+	    print ("No id provided")
+	    return
+        results = self.database_cursor.execute(
+                "SELECT * FROM files WHERE fileId =?", fileId)
+        for row in results:
+            return row
 
 
-    def download_fileInstance(self, fileInstance, base_path = "./"):
-        if self.is_folder(fileInstance):
-            self.download_folder(fileInstance, base_path + '/{0}'.format(fileInstance.name))
+    def is_folder(self,file):
+        return file['mimeType'] == 'application/vnd.google-apps.folder'
+
+    def is_google_doc(self, file):
+        return file['mimeType'] in ["application/vnd.google-apps.document","application/vnd.google-apps.presentation","application/vnd.google-apps.script","application/vnd.google-apps.spreadsheet","application/vnd.google-apps.form","application/vnd.google-apps.drawing","application/vnd.google-apps.map","application/vnd.google-apps.sites"] 
+
+
+    def download_file(self, file, base_path = "./"):
+        if self.is_folder(file) == True:
+            self.download_folder(file, base_path + '/{0}'.format(file['name']))
         else:
-            file_path = os.path.join(base_path, fileInstance.name)
-            fileInstance.path = file_path
-            if fileInstance.is_google_doc:
-                link_fileInstance = self.service.file().get(fileId = fileInstance.fileId, fields = "webViewLink").execute()
-                with open("{0}/{1}.desktop".format(base_path,fileInstance.name),'w') as shortcut:
-                    shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(fileInstance.name,link_fileInstance['webViewLink']))
+            file_path = os.path.join(base_path, file['name'])
+            fileId = file['id']
+            if self.is_google_doc(file):
+                link_file = self.service.file().get(fileId = fileId, fields = "webViewLink").execute()
+                with open("{0}/{1}.desktop".format(base_path,file.name),'w') as shortcut:
+                    shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file.name,link_file['webViewLink']))
                 
             else:
-                request = self.service.file().get_media(fileId=fileInstance.fileId)
+                request = self.service.files().get_media(fileId=fileId)
                 fh = io.FileIO(file_path,'wb')
                 downloader = apiclient.http.MediaIoBaseDownload(fh, request)
                 done = False
                 while done == False:
                     status, done = downloader.next_chunk()
-                    print ("File {0} downloaded {1} %.".format( fileInstance.name ,int(status.progress() * 100)))
+                    print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
                 fh.close()
+        self.log_database(file, base_path) # to be implemented
 
     def download_folder(self, folder, base_path = "./"):
         self.makedir_from_path(base_path)
@@ -205,15 +274,18 @@ class GoogleDriveInstance():
             for file in file_list:
                 if file['id'] in self.opt_list:
                     return
-                fileInstance = GoogleDriveInstance(file)
-                self.index_dict[fild['id']] = fileInstance
-                self.download_file(fileInstance)
+                self.download_file(file, base_path)
             if 'nextPageToken' in results:
                  results = self.service.files().list(pageToken = results['nextPageToken']).execute()
             else:
                 break
         return
 
+    """
+    ========================
+       Outdated functions
+    ========================
+    """
     def detect_acticities(self):
         service = apiclient.discovery.build('appsactivity','v1', http = self.http)
         results = service.activities().list(
@@ -274,56 +346,38 @@ class GoogleDriveInstance():
             os.rename(path + event['oldTitle'], path + event['newTitle'])
         return
 
-    def detect_changes(self):
-        print (self.change_page_token)
-        if self.change_page_token == None:
-            response = self.service.changes().getStartPageToken().execute()
-            self.change_page_token = response.get('startPageToken')
-        page_token = self.change_page_token
-        while page_token != None:
-            response = self.service.changes().list(
-                    pageToken = page_token,
-                    spaces='drive'
-                    ).execute()
-            print (self.change_page_token)
-            print (response.get('changes'))
-            for change in response.get('changes'):
-                fileId = change.get('fileId')
-                if fileId in self.opt_list:
-                    continue
-                file = self.service.files().get(fileId = fileId, fields = "id,name,mimeType,parents").execute()
-                print (file)
-                if self.is_google_doc(file) == False and 'parents' in file:
-                    print ("{0}".format(file['id']))
-                    print (self.is_folder(file))
-                    if self.is_folder(file) == True:
-                        print (file['name'])
-                    #path = self.get_file_path(fileId)
-                    #self.download_file(file, path)
-            if 'newStartPageToken' in response:
-                self.change_page_token = response.get('newStartPageToken')
-            page_token = response.get('nextPageToken')
-        self.update_configs()
 
-class GoogleDriveFile():
-    def __init__(self, row):
-        self.id,
-        self.fileid, 
-        self.name, 
-        self.mimeType, 
-        self.path, 
-        self.parents, 
-        self.last_modified = row
+    def get_file_path(self, fileId):
+        base_path = self.local_path
+        extend_path = []
+        #root_response = self.service.files().list(q = "'root' in parents").execute()
+        #root_fileId = response['files']['id'] 
+        #root_file = self.service.files().get(fileId = root_fileId).execute()
+        #rootId = root_file['parents']
+        item = self.service.files().get(fileId = fileId, fields = 'name, parents').execute()
 
-    def is_folder(self):
-        return self.mimeType == 'application/vnd.google-apps.folder'
+        while True:
+            fileId = item['parents'][0]
+            item = self.service.files().get(fileId = fileId, fields = 'name, parents').execute()
+            if 'parents' not in item:
+                break
+            extend_path.append(item['name'])
+        extend_path.reverse()
 
-    def is_google_doc(self):
-        return self.mimeType in ["application/vnd.google-apps.document","application/vnd.google-apps.presentation","application/vnd.google-apps.script","application/vnd.google-apps.spreadsheet","application/vnd.google-apps.form","application/vnd.google-apps.drawing","application/vnd.google-apps.map","application/vnd.google-apps.sites"] 
+        return base_path + "/".join(extend_path)
 
+    def get_files_by_folder(self, folder):
+        files = self.service.files().list(q = "'{0}' in parents".format(folder)).execute()
+        files  = files.get(['files'], [])
+        return files
 
 
 
 
 if __name__ == '__main__':
     drive = GoogleDriveInstance(sys.argv)
+#    results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs').execute()
+#    drive.download_folder(results,drive.local_path + 'test')
+    drive.list_database_files()
+#   self.detect_changes()
+
