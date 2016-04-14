@@ -5,6 +5,7 @@ import os
 import io
 import apiclient
 import time
+import sqlite3
 from ast import literal_eval
 
 
@@ -35,6 +36,8 @@ class GoogleDriveInstance():
         if not os.path.exists(self.local_path):
             os.makedirs(self.local_path)
         self.credentials = self.get_credentials()
+        self.index_database = sqlite3.connect('./.database/drive.db')
+        self.database_cursor = self.index_database.cursor()
         self.opt_list, self.change_page_token,self.last_check_time = self.get_configs()
         
 
@@ -49,6 +52,13 @@ class GoogleDriveInstance():
 #        self.detect_changes()
         
         self.detect_acticities()
+        
+    def get_file_from_db(self, fileId):
+        results = self.database_cursor.execute(
+                "SELECT * FROM files WHERE fileId =?", fileId)
+        for row in results:
+            return GoogleDriveInstance(row)
+
 
     def get_path(self):
         home_dir = os.path.expanduser('~')
@@ -165,30 +175,26 @@ class GoogleDriveInstance():
         files  = files.get(['files'], [])
         return files
 
-    def is_folder(self, file):
-        return file['mimeType'] == 'application/vnd.google-apps.folder'
 
-    def is_google_doc(self, file):
-        return file['mimeType'] in ["application/vnd.google-apps.document","application/vnd.google-apps.presentation","application/vnd.google-apps.script","application/vnd.google-apps.spreadsheet","application/vnd.google-apps.form","application/vnd.google-apps.drawing","application/vnd.google-apps.map","application/vnd.google-apps.sites"] 
-
-    def download_file(self, file, base_path = "./"):
-        if self.is_folder(file):
-            self.download_folder(file, base_path + '/{0}'.format(file['name']))
+    def download_fileInstance(self, fileInstance, base_path = "./"):
+        if self.is_folder(fileInstance):
+            self.download_folder(fileInstance, base_path + '/{0}'.format(fileInstance.name))
         else:
-            file_path = os.path.join(base_path, file['name'])
-            if self.is_google_doc(file):
-                link_file = self.service.files().get(fileId = file['id'], fields = "webViewLink").execute()
-                with open("{0}/{1}.desktop".format(base_path,file['name']),'w') as shortcut:
-                    shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(file['name'],link_file['webViewLink']))
+            file_path = os.path.join(base_path, fileInstance.name)
+            fileInstance.path = file_path
+            if fileInstance.is_google_doc:
+                link_fileInstance = self.service.file().get(fileId = fileInstance.fileId, fields = "webViewLink").execute()
+                with open("{0}/{1}.desktop".format(base_path,fileInstance.name),'w') as shortcut:
+                    shortcut.write("[Desktop Entry]\nEncoding=UTF-8\nName={0}\nURL={1}\nType=Link\nIcon=text-html\nName[en_US]=Google document link".format(fileInstance.name,link_fileInstance['webViewLink']))
                 
             else:
-                request = self.service.files().get_media(fileId=file['id'])
+                request = self.service.file().get_media(fileId=fileInstance.fileId)
                 fh = io.FileIO(file_path,'wb')
                 downloader = apiclient.http.MediaIoBaseDownload(fh, request)
                 done = False
                 while done == False:
                     status, done = downloader.next_chunk()
-                    print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
+                    print ("File {0} downloaded {1} %.".format( fileInstance.name ,int(status.progress() * 100)))
                 fh.close()
 
     def download_folder(self, folder, base_path = "./"):
@@ -199,7 +205,9 @@ class GoogleDriveInstance():
             for file in file_list:
                 if file['id'] in self.opt_list:
                     return
-                self.download_file(file)
+                fileInstance = GoogleDriveInstance(file)
+                self.index_dict[fild['id']] = fileInstance
+                self.download_file(fileInstance)
             if 'nextPageToken' in results:
                  results = self.service.files().list(pageToken = results['nextPageToken']).execute()
             else:
@@ -297,6 +305,21 @@ class GoogleDriveInstance():
             page_token = response.get('nextPageToken')
         self.update_configs()
 
+class GoogleDriveFile():
+    def __init__(self, row):
+        self.id,
+        self.fileid, 
+        self.name, 
+        self.mimeType, 
+        self.path, 
+        self.parents, 
+        self.last_modified = row
+
+    def is_folder(self):
+        return self.mimeType == 'application/vnd.google-apps.folder'
+
+    def is_google_doc(self):
+        return self.mimeType in ["application/vnd.google-apps.document","application/vnd.google-apps.presentation","application/vnd.google-apps.script","application/vnd.google-apps.spreadsheet","application/vnd.google-apps.form","application/vnd.google-apps.drawing","application/vnd.google-apps.map","application/vnd.google-apps.sites"] 
 
 
 
