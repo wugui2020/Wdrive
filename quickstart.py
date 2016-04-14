@@ -64,7 +64,7 @@ class GoogleDriveInstance():
                 WHERE type = 'table' AND name = 'files'""")
         exist = self.database_cursor.fetchall()
         if exist != None:
-            return
+            #return
             self.database_cursor.execute(
                     """DROP TABLE files
                     """)
@@ -77,6 +77,7 @@ class GoogleDriveInstance():
                 name text,
                 path text,
                 inode integer,
+                parents text,
                 UNIQUE (fileId)
                 )""")
             self.index_database.commit()
@@ -206,8 +207,18 @@ class GoogleDriveInstance():
 
     def handle_changes(self, file):
         if file['trashed'] == True:
-            self.delete_file(file)
-            self.delete_row_database(file)
+            entry = self.query_file_via_fileId(file['id'])
+            path = os.path.join(entry[2],entry[1])
+            if self.is_folder(file) == True:
+                shutil.rmtree(path)
+            else:
+                os.remove(path)
+            self.database_cursor.execute(
+                    """
+                    DELETE FROM files
+                    WHERE fileId =?
+                    """, (file['id'],))
+            self.index_database.commit()
             return
         else:
             self.database_cursor.execute(
@@ -217,15 +228,24 @@ class GoogleDriveInstance():
                     """
                     ,(file['id'],))
             exist = self.database_cursor.fetchall()
-            if exist == None:
+
+            if exist != None:
+                parent_on_file = exist[0][4]
+                path = exist[0][2]
+                name = exist[0][1]
+                if parent_on_file == file['parents']:
+                    if name == file['name']:
+                        self.rename(file, path)
+                else:
+                    self.move_file(file, path)
+
+            else:
                 path = self.get_path(file)
                 if self.is_folder(file):
                     self.download_folder(file, path)
                 else:
                     self.download_file(file, path)
-            else:
-                path = exist[0][3]
-                self.rename(file, path)
+
             stat = os.stat(file_path)
             inode = stat.st_ino
             self.log_database(file, path, inode)
@@ -245,17 +265,17 @@ class GoogleDriveInstance():
             self.database_cursor.execute(
                     """
                     UPDATE files
-                    SET name = ?, path = ?, inode = ?
+                    SET name = ?, path = ?, inode = ?, parents = ?
                     WHERE fileId = ?;
                     """
-                    , (file['name'], path, inode, file['id']))
+                    , (file['name'], path, inode, file['parents'],file['id']))
         else:   
             self.database_cursor.execute(
                 """
                 INSERT INTO files 
-                VALUES(?,?,?,?) 
+                VALUES(?,?,?,?,?) 
                 """
-                ,(file['id'], file['name'], path, inode))
+                ,(file['id'], file['name'], path, file['parents'], inode))
         self.index_database.commit()
         return
 
@@ -331,6 +351,25 @@ class GoogleDriveInstance():
                 break
         return
 
+    def get_file_path(self, file):
+        extend_path = []
+        entry = self.query_file_via_fileId(file['id'])
+        while entry == None:
+            parent_Id = file['parents'][0]
+            file = self.service.files().get(fileId = parent_Id, fields = 'id, name, parents').execute()
+            print (file)
+            if 'parents' not in file:
+                base_path = self.local_path
+                extend_path.append(file['name'])
+                break
+            extend_path.append(file['name'])
+            entry = self.query_file_via_fileId(file['id'])
+            print (entry)
+        base_path = entry[2]
+        extend_path.reverse()
+
+        return base_path + '/' + "/".join(extend_path)
+
     """
     ========================
        Outdated functions
@@ -397,24 +436,6 @@ class GoogleDriveInstance():
         return
 
 
-    def get_file_path(self, file):
-        extend_path = []
-        entry = self.query_file_via_fileId(file['id'])
-        while entry == None:
-            parent_Id = file['parents'][0]
-            file = self.service.files().get(fileId = parent_Id, fields = 'id, name, parents').execute()
-            print (file)
-            if 'parents' not in file:
-                base_path = self.local_path
-                extend_path.append(file['name'])
-                break
-            extend_path.append(file['name'])
-            entry = self.query_file_via_fileId(file['id'])
-            print (entry)
-        base_path = entry[2]
-        extend_path.reverse()
-
-        return base_path + '/' + "/".join(extend_path)
 
     def get_files_by_folder(self, folder):
         files = self.service.files().list(q = "'{0}' in parents".format(folder)).execute()
@@ -430,6 +451,6 @@ if __name__ == '__main__':
 #    drive.download_folder(results,drive.local_path + '222')
 #    drive.list_database_files()
 #    drive.detect_changes()
-    results = drive.service.files().get(fileId='1k5r3spjkSQa6OntFfJRLIfUztoAPnGxXhyvlOfQ7OR4', fields="name, id, parents").execute()
+#    results = drive.service.files().get(fileId='1k5r3spjkSQa6OntFfJRLIfUztoAPnGxXhyvlOfQ7OR4', fields="name, id, parents").execute()
 #    print (results)
-    print (drive.get_file_path(results))
+#    print (drive.get_file_path(results))
