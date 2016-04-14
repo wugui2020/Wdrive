@@ -235,9 +235,13 @@ class GoogleDriveInstance():
                 name = exist[0][1]
                 if parent_on_file == file['parents']:
                     if name == file['name']:
-                        self.rename(file, path)
+                        old_name = os.path.join(path, name)
+                        new_name = os.path.join(path, file['name'])
+                        os.rename(old_name, new_name)
                 else:
                     self.move_file(file, path)
+                if self.is_folder(file) == True:
+                    pass # recursive path update to be implemented
 
             else:
                 path = self.get_path(file)
