@@ -211,7 +211,7 @@ class GoogleDriveInstance():
         while page_token != None:
             response = self.service.changes().list(
                     pageToken = page_token,
-                    fields = "changes(fileId, file(id, name, mimeType, parents, trashed)), nextPageToken",
+                    fields = "changes(fileId, file(id, name, mimeType, parents, trashed)), nextPageToken, newStartPageToken",
                     spaces='drive'
                     ).execute()
             for change in response.get('changes'):
@@ -272,6 +272,7 @@ class GoogleDriveInstance():
                     oldpath = os.path.join(path, name)
                     if self.is_google_doc(file):
                         oldpath += ".desktop"
+                        newpath += ".desktop"
                     move(oldpath, newpath)
                 if self.is_folder(file) == True:
                     self.folder_path_update(file) # recursive path update to be implemented
@@ -310,8 +311,7 @@ class GoogleDriveInstance():
     		WHERE parents = ?
     		""", (file['id'],))
     	for row in results:
-    		item = self.service.files().get(fileId = row[0]).execute()
-    		path = self.get_file_path(item)
+    		path = os.path.join(self.get_file_path(file), file['name'])
 		results = self.database_cursor.execute(
 	    		"""
 	    		UPDATE files
@@ -320,7 +320,8 @@ class GoogleDriveInstance():
 	    		""", (path, file['id']))
 	    	self.index_database.commit()
 	    	if row[2] == 1:
-	    		self.folder_path_update(item)
+    		    item = self.service.files().get(fileId = row[0]).execute()
+	    	    self.folder_path_update(item)
 
     def log_database(self, file, path, inode):
         checker = self.database_cursor.execute(
@@ -329,7 +330,7 @@ class GoogleDriveInstance():
                 WHERE fileId = ?
                 """, (file['id'],))
         exist = self.database_cursor.fetchall()
-        isFolder = [1,0][self.is_folder(file)]
+        isFolder = [0,1][self.is_folder(file)]
 
         if exist:
             self.database_cursor.execute(
@@ -441,8 +442,6 @@ class GoogleDriveInstance():
         base_path = entry[2]
         extend_path.reverse()
         final = base_path + '/' + "/".join(extend_path)
-        if self.is_google_doc(file) == True:
-            final += ".desktop"
         return final
     """
     ========================
@@ -521,10 +520,11 @@ class GoogleDriveInstance():
 
 if __name__ == '__main__':
     drive = GoogleDriveInstance(sys.argv)
-    results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs', fields = "id, name, mimeType, parents").execute()
+#    results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs', fields = "id, name, mimeType, parents").execute()
 #    print ([0,1][drive.is_folder(results)])
-    drive.download_folder(results,drive.local_path + '222')
+#    drive.download_folder(results,drive.local_path + '222')
     print ("============================")
+#    print (drive.change_page_token)
     drive.list_database_files()
 #    print (drive.change_page_token)
     drive.detect_changes()
