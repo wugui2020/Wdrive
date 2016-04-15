@@ -7,6 +7,7 @@ import apiclient
 import time
 import sqlite3
 from ast import literal_eval
+from shutil import rmtree
 
 
 import oauth2client
@@ -78,6 +79,7 @@ class GoogleDriveInstance():
                 path text,
                 inode integer,
                 parents text,
+                isFolder integer,
                 UNIQUE (fileId)
                 )""")
             self.index_database.commit()
@@ -210,7 +212,7 @@ class GoogleDriveInstance():
             entry = self.query_file_via_fileId(file['id'])
             path = os.path.join(entry[2],entry[1])
             if self.is_folder(file) == True:
-                shutil.rmtree(path)
+                rmtree(path)
             else:
                 os.remove(path)
             self.database_cursor.execute(
@@ -219,6 +221,7 @@ class GoogleDriveInstance():
                     WHERE fileId =?
                     """, (file['id'],))
             self.index_database.commit()
+            print ("{0} has been deleted.".format(file['name']))
             return
         else:
             self.database_cursor.execute(
@@ -241,7 +244,7 @@ class GoogleDriveInstance():
                 else:
                     self.move_file(file, path)
                 if self.is_folder(file) == True:
-                    pass # recursive path update to be implemented
+                    self.folder_path_update(file) # recursive path update to be implemented
 
             else:
                 path = self.get_path(file)
@@ -257,6 +260,35 @@ class GoogleDriveInstance():
         print ("{0} has been updated.".format(file['name']))
 
         return
+        
+    def folder_path_update(self, file):
+    	self.database_cursor.execute(
+    		"""
+    		SELECT name, fileId
+    		FROM files
+    		WHERE fileId = ?
+    		"""
+    		,(file['id']))
+    	entry = self.database_cursor.fetchall()
+    	name_on_file = entry[1]
+    	results = self.database_cursor.execute(
+    		"""
+    		SELECT fileId, parents, isFolder
+    		FROM files
+    		WHERE parents = ?
+    		""", (file['id'],))
+    	for row in results:
+    		item = self.service.files().get(fileId = row[0]).execute()
+    		path = self.get_file_path(item)
+			results = self.database_cursor.execute(
+	    		"""
+	    		UPDATE files
+	    		SET path = ?
+	    		WHERE parents = ?
+	    		""", (path, file['id']))
+	    	self.index_database.commit()
+	    	if row[2] == 1:
+	    		self.folder_path_update(item)
 
     def log_database(self, file, path, inode):
         checker = self.database_cursor.execute(
@@ -269,17 +301,17 @@ class GoogleDriveInstance():
             self.database_cursor.execute(
                     """
                     UPDATE files
-                    SET name = ?, path = ?, inode = ?, parents = ?
+                    SET name = ?, path = ?, inode = ?, parents = ?, isFolder = ?
                     WHERE fileId = ?;
                     """
-                    , (file['name'], path, inode, file['parents'],file['id']))
+                    , (file['name'], path, inode, file['parents'], self.is_folder(file), file['id']))
         else:   
             self.database_cursor.execute(
                 """
                 INSERT INTO files 
-                VALUES(?,?,?,?,?) 
+                VALUES(?,?,?,?,?,?) 
                 """
-                ,(file['id'], file['name'], path, file['parents'], inode))
+                ,(file['id'], file['name'], path, inode, file['parents'], self.is_folder(file)))
         self.index_database.commit()
         return
 
