@@ -59,6 +59,9 @@ class GoogleDriveInstance():
             self.service = apiclient.discovery.build('drive', 'v3', http=self.http)
         except httplib2.ServerNotFoundError:
             print ("ServerNotFoundError: Please try again later")
+        root_folder = self.service.files().list(q = "'root' in parents", fields = "files(parents)").execute()
+
+        self.root_id = root_folder['files'][0]['parents'][0]
 
         self.database_cursor.execute(
                 """SELECT name
@@ -181,6 +184,24 @@ class GoogleDriveInstance():
             self.opt_list.pop(self.opt_list.index(ID))
             self.update_configs()
         return True
+    
+    def change_filter(self, change):
+        fileId = change.get('fileId')
+        print ("fileid",fileId)
+        file = change.get('file')
+        if 'parents' not  in file:
+            return None
+        while fileId not in self.opt_list and fileId != self.root_id:
+            entry = self.query_file_via_fileId(fileId)
+            if entry == None:
+                results = self.service.files().get(fileId = fileId, fields = "parents").execute()
+                print (results)
+                fileId = results['parents'][0]
+            else:
+                return file
+
+        return None
+
 
     def detect_changes(self):
         if self.change_page_token == None:
@@ -190,16 +211,14 @@ class GoogleDriveInstance():
         while page_token != None:
             response = self.service.changes().list(
                     pageToken = page_token,
-                    fields = "changes(fileId), nextPageToken",
+                    fields = "changes(fileId, file(id, name, mimeType, parents, trashed)), nextPageToken",
                     spaces='drive'
                     ).execute()
             for change in response.get('changes'):
-                fileId = change.get('fileId')
-                if fileId in self.opt_list:
+                file = self.change_filter(change)
+                if file == None:
                     continue
-                file = self.service.files().get(fileId = fileId, fields = "id,name,mimeType,parents,trashed").execute()
-                if self.is_google_doc(file) == False and 'parents' in file: 
-                    self.handle_changes(file)
+                self.handle_changes(file)
 		    # 'parents in file means it's in your drive'
                                         #path = self.get_file_path(fileId)
                     #self.download_file(file, path)
@@ -240,14 +259,20 @@ class GoogleDriveInstance():
                 parent_on_file = exist[0][4]
                 path = exist[0][2]
                 name = exist[0][1]
-                if parent_on_file == file['parents']:
-                    if name == file['name']:
+                if parent_on_file == file['parents'][0]:
+                    if name != file['name']:
                         old_name = os.path.join(path, name)
                         new_name = os.path.join(path, file['name'])
+                        if self.is_google_doc(file):
+                            oldname += ".desktop"
+                            newname += ".desktop"
                         os.rename(old_name, new_name)
                 else:
                     newpath = self.get_file_path(file)
-                    move(os.path.join(path, name), os.path.join(newpath, name))
+                    oldpath = os.path.join(path, name)
+                    if self.is_google_doc(file):
+                        oldpath += ".desktop"
+                    move(oldpath, newpath)
                 if self.is_folder(file) == True:
                     self.folder_path_update(file) # recursive path update to be implemented
 
@@ -267,6 +292,7 @@ class GoogleDriveInstance():
         return
         
     def folder_path_update(self, file):
+        print ("folder path update", file)
     	self.database_cursor.execute(
     		"""
     		SELECT name, fileId
@@ -275,7 +301,8 @@ class GoogleDriveInstance():
     		"""
     		,(file['id'],))
     	entry = self.database_cursor.fetchall()
-    	name_on_file = entry[1]
+        print ("entry", entry)
+    	name_on_file = entry[0][0]
     	results = self.database_cursor.execute(
     		"""
     		SELECT fileId, parents, isFolder
@@ -402,20 +429,21 @@ class GoogleDriveInstance():
         print (entry)
         while entry == None:
             parent_Id = file['parents'][0]
-            file = self.service.files().get(fileId = parent_Id, fields = 'id, name, parents').execute()
-            print ("file", file)
-            if 'parents' not in file:
+            item = self.service.files().get(fileId = parent_Id, fields = 'id, name, parents').execute()
+            print ("file", item)
+            if 'parents' not in item:
                 base_path = self.local_path
                 extend_path.reverse()
                 return base_path + '/' + "/".join(extend_path)
-            extend_path.append(file['name'])
-            entry = self.query_file_via_fileId(file['id'])
+            extend_path.append(item['name'])
+            entry = self.query_file_via_fileId(item['id'])
             print (entry)
         base_path = entry[2]
         extend_path.reverse()
-
-        return base_path + '/' + "/".join(extend_path)
-
+        final = base_path + '/' + "/".join(extend_path)
+        if self.is_google_doc(file) == True:
+            final += ".desktop"
+        return final
     """
     ========================
        Outdated functions
@@ -496,7 +524,8 @@ if __name__ == '__main__':
     results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs', fields = "id, name, mimeType, parents").execute()
 #    print ([0,1][drive.is_folder(results)])
     drive.download_folder(results,drive.local_path + '222')
-#    drive.list_database_files()
+    print ("============================")
+    drive.list_database_files()
 #    print (drive.change_page_token)
     drive.detect_changes()
 #    results = drive.service.files().get(fileId='1k5r3spjkSQa6OntFfJRLIfUztoAPnGxXhyvlOfQ7OR4', fields="name, id, parents").execute()
