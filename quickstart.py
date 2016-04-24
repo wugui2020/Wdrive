@@ -331,7 +331,6 @@ class GoogleDriveInstance():
 	    	    self.folder_path_update(item)
 
     def log_database(self, file, path, inode):
-        print ("log database", file['name'], path, inode)
         checker = self.database_cursor.execute(
                 """
                 SELECT * FROM files
@@ -369,35 +368,59 @@ class GoogleDriveInstance():
 
     def check_local_changes(self):
         base_path = self.local_path + '222'
+        missing, new = [], []
         for path, dir_list, file_list in os.walk(base_path):
-            rename = dir_list + file_list
-            print (path, dir_list, file_list, rename)
-            edit, missing = [], []
-            i = 0
-            while i < len(rename):
-                if rename[i].endswith('.desktop'):
-                    file_name = rename[i][:-8]
+            local_files = dir_list + file_list
+            print (path, dir_list, file_list, local_files)
+            # missing file check
+            all_files_in_db = self.query_local_file(path)
+            for file in all_files_in_db:
+                if len(file[0]) > 28:
+                    file_name = file[1] + ".desktop"
                 else:
-                    file_name = rename[i]
+                    file_name = file[1]
+                file_path = os.path.join(path, file_name)
+                if os.path.exists(file_path) == False:
+                    missing.append(file[0])
+                else:
+                    stats = os.stat(file_path)
+                    if stats[1] != file[3]:
+                        missing.append(file[0])
+            i = 0
+            while i < len(local_files):
+                if local_files[i].endswith('.desktop'):
+                    file_name = local_files[i][:-8]
+                else:
+                    file_name = local_files[i]
                 exist = self.query_local_file(path, name = file_name)
-                if exist != None:
-                    edit.append(rename.pop(i))
-                else:
-                    i += 1
                 print (exist)
-            print (edit)
-            i = 0
-            while i < len(edit):
-                stats = os.stat(os.path.join(path, edit[i]))
-                print (edit[i])
-                exist = self.query_local_file(path, inode = stats[1])
                 if exist == None:
-                    missing.append(edit.pop(i))
+                    file_name = local_files.pop(i)
+                    parent = self.query_local_file(path)[0][4]
+                    file_path = os.path.join(path, file_name)
+                    is_folder = os.path.isdir(file_path)
+                    new.append((path, file_name, parent,is_folder))
                 else:
                     i += 1
+            i = 0
+            while i < len(local_files):
+                stats = os.stat(os.path.join(path, local_files[i]))
+                print (local_files[i])
+                exist = self.query_local_file(path, inode = stats[1])
                 print (exist)
-            print ("missing", missing)
-            print ("edit",edit)
+                if exist == None:
+                    file_name = local_files.pop(i)
+                    parent = self.query_local_file(path)[0][4]
+                    file_path = os.path.join(path, file_name)
+                    is_folder = os.path.isdir(file_path)
+                    new.append((path,file_name, parent,is_folder))
+                else:
+                    i += 1
+            print ("local_files", local_files)
+            print ("missing",missing)
+            print ("new",new)
+        self.files_update(missing, new)
+
                     
             
             
@@ -411,13 +434,43 @@ class GoogleDriveInstance():
     """
 
 
-    def file_update(self):
+    def files_update(self, missing, new):
+        for file_id in missing:
+            self.service.files().update(body = {'trashed':True}, fileId = file_id).execute()
+            self.database_cursor.execute(
+                    "DELETE FROM files WHERE fileId = ?", (file_id,))
+            self.index_database.commit()
+        if new == []:
+            return 
+        id_list = self.service.files().generateIds(count = len(new)).execute()
+        for file_path, file_name, parent, is_folder in new:
+            newfile_id = id_list['ids'].pop()
+            if file_name.endswith('.desktop'): 
+                name = file_name[:-8]
+            else:
+                name = file_name
+            data = {'id':newfile_id, 'name':name, 'parents':[parent]}
+            path = os.path.join(file_path, file_name)
+            if is_folder:
+                body['mimeType'] = 'application/vnd.google-apps.folder'
+                self.service.files().create(body = data).execute()
+                is_folder = 1
+            else:
+                media = apiclient.http.MediaFileUpload(path, resumable = True)
+                self.service.files().create(body = data, media_body = media).execute()
+                is_folder = 0
+            inode = os.stat(path).st_ino
+            self.database_cursor.execute(
+                    "INSERT INTO files VALUES (?,?,?,?,?,?)", (newfile_id, name, file_path, inode, parent, is_folder))
+            self.index_database.commit()
         return
 
     def query_local_file(self, path, name = None, inode = None):
         print ("name", name, "inode", inode)
         if name == None and inode == None:
-            raise 
+            results = self.database_cursor.execute(
+                    "SELECT * FROM files WHERE path =?", (path,))
+            return results.fetchall()
         if name != None and inode == None: # query by name and path --- rename check
             results = self.database_cursor.execute(
                     "SELECT * FROM files WHERE path =? and name = ?", (path, name))
@@ -450,8 +503,10 @@ class GoogleDriveInstance():
 
 
     def download_file(self, file, base_path = "./"):
+        inode = 0
         if self.is_folder(file) == True:
-            inode = self.download_folder(file, base_path + '/{0}'.format(file['name']))
+            self.download_folder(file, base_path + '/{0}'.format(file['name']))
+            file_path =  base_path + '/{0}'.format(file['name'])
         else:
             file_path = os.path.join(base_path, file['name'])
             fileId = file['id']
@@ -470,27 +525,25 @@ class GoogleDriveInstance():
                     status, done = downloader.next_chunk()
                     print ("File {0} downloaded {1} %.".format( file['name'] ,int(status.progress() * 100)))
                 fh.close()
-            stat = os.stat(file_path)
-            print (stat)
-            inode = stat.st_ino
+        stat = os.stat(file_path)
+        inode = stat.st_ino
         self.log_database(file, base_path, inode)
 
     def download_folder(self, folder, base_path = "./"):
         print (folder)
         self.makedir_from_path(base_path)
-        inode = os.stat(base_path).st_ino
-        results = self.service.files().list(q="'{0}' in parents".format(folder['id']), fields = "files(id, name, mimeType, parents)").execute()
+        results = self.service.files().list(q="'{0}' in parents".format(folder['id']), fields = "files(id, name, mimeType, parents, trashed)").execute()
         while True:
             file_list = results['files']
             for file in file_list:
-                if file['id'] in self.opt_list:
-                    return
+                if file['id'] in self.opt_list or file['trashed'] == True:
+                    continue
                 self.download_file(file, base_path)
             if 'nextPageToken' in results:
                  results = self.service.files().list(pageToken = results['nextPageToken']).execute()
             else:
                 break
-        return inode
+        return
 
     def get_file_path(self, file):
         extend_path = []
@@ -588,11 +641,11 @@ class GoogleDriveInstance():
 
 if __name__ == '__main__':
     drive = GoogleDriveInstance(sys.argv)
-    results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs', fields = "id, name, mimeType, parents").execute()
-    drive.download_folder(results,drive.local_path + '222')
-    drive.detect_changes()
+    #results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs', fields = "id, name, mimeType, parents").execute()
+    #drive.download_folder(results,drive.local_path + '222')
+    #drive.detect_changes()
     print ("============================")
-    #drive.list_database_files()
+    drive.list_database_files()
     print ("============================")
     drive.check_local_changes()
 #    print ([0,1][drive.is_folder(results)])
