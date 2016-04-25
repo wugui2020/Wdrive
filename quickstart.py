@@ -15,11 +15,6 @@ import oauth2client
 from oauth2client import client
 from oauth2client import tools
 
-try:
-    import argparse
-    flags = argparse.ArgumentParser(parents=[tools.argparser]).parse_args()
-except ImportError:
-    flags = None
 
 SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/activity'
 CLIENT_SECRET_FILE = 'client_secret_426774337873-0jm29chokpdr9pm0scnla58ck6g1s0r3.apps.googleusercontent.com.json'
@@ -53,8 +48,6 @@ class GoogleDriveInstance():
         self.database_cursor = self.index_database.cursor()
 
         self.opt_list, self.change_page_token,self.last_check_time = self.get_configs()
-        
-
         try:
             self.http = self.credentials.authorize(httplib2.Http())
             self.service = apiclient.discovery.build('drive', 'v3', http=self.http)
@@ -63,31 +56,47 @@ class GoogleDriveInstance():
         root_folder = self.service.files().list(q = "'root' in parents", fields = "files(parents)").execute()
 
         self.root_id = root_folder['files'][0]['parents'][0]
-        print ("root id", self.root_id)
 
         self.database_cursor.execute(
                 """SELECT name
                 FROM sqlite_master
                 WHERE type = 'table' AND name = 'files'""")
         exist = self.database_cursor.fetchall()
-        if exist != []:
-            return
+        if exist == []:
             self.database_cursor.execute(
-                    """DROP TABLE files
-                    """)
+                """CREATE TABLE files
+                (
+                fileId text,
+                name text,
+                path text,
+                inode integer,
+                parents text,
+                isFolder integer,
+                UNIQUE (fileId)
+                )""")
+            self.index_database.commit()
+        if argv[1] == '-i':
+            folder = self.service.files().get(fileId = self.root_id).execute()
+            self.download_folder(folder, "./googledrive")
+        elif argv[1] == '-out':
+            opt_name = argv[2]
+            file = self.service.files().list(q = 'name = "{0}"'.format(opt_name))
+            self.opt_out(file['id'])
+        elif argv[1] == '-in':
+            opt_name = argv[2]
+            file = self.service.files().list(q = 'name = "{0}"'.format(opt_name))
+            self.opt_in(file['id'])
+        elif argv[1] == "-push":
+            self.check_local_changes()
+        elif argv[1] == "-pull":
+            self.detect_changes()
+        else:
+            print "wrong argument"
 
-        self.database_cursor.execute(
-            """CREATE TABLE files
-            (
-            fileId text,
-            name text,
-            path text,
-            inode integer,
-            parents text,
-            isFolder integer,
-            UNIQUE (fileId)
-            )""")
-        self.index_database.commit()
+
+            #self.database_cursor.execute(
+            #        """DROP TABLE files
+            #        """)
 
 
     """
@@ -641,13 +650,10 @@ if __name__ == '__main__':
     #results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs', fields = "id, name, mimeType, parents").execute()
     #drive.download_folder(results,drive.local_path + '222')
     
-    drive.detect_changes()
-    print ("============================")
+#    drive.detect_changes()
     #drive.list_database_files()
-    print ("============================")
-    drive.check_local_changes()
+#    drive.check_local_changes()
 #    print ([0,1][drive.is_folder(results)])
-    print ("============================")
 #    print (drive.change_page_token)
 #    print (drive.change_page_token)
 #    results = drive.service.files().get(fileId='1k5r3spjkSQa6OntFfJRLIfUztoAPnGxXhyvlOfQ7OR4', fields="name, id, parents").execute()
