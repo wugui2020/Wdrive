@@ -12,14 +12,19 @@ Reference: [Google API Python Quick Start](https://developers.google.com/drive/v
 
 ## Usage
 ```python quickstart.py -i```
+
 Initialization of Wdrive. 
 Note that this operation will download all the files from your Google Drive. 
 An opt-out prior to this command is recommended .
+
 ```python quickstart.py -out + [name]```
 ```python quickstart.py -in + [name]```
-Opt out the file you don't want to sync. The name can be folder name or file name.
+
+Opt out and include the file you don't want to sync. The name can be folder name or file name.
+
 ```python quickstart.py -pull```
-Get latest updatae from Drvie.
+Get latest updatae from Drive.
+
 ```python quickstart.py -push```
 Push your local changes to the cloud.
 
