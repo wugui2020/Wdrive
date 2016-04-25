@@ -43,6 +43,7 @@ class GoogleDriveInstance():
 	"""change_page_token: (String) The string for Drive change queries."""
 	"""last_check_time: (Integer) Time when the last change happened in milisec from epoc."""
 	
+        print (argv)
 
         self.local_path = os.getcwd()+"/googledrive/"
         if not os.path.exists(self.local_path):
@@ -371,7 +372,6 @@ class GoogleDriveInstance():
         missing, new = [], []
         for path, dir_list, file_list in os.walk(base_path):
             local_files = dir_list + file_list
-            print (path, dir_list, file_list, local_files)
             # missing file check
             all_files_in_db = self.query_local_file(path)
             for file in all_files_in_db:
@@ -380,20 +380,20 @@ class GoogleDriveInstance():
                 else:
                     file_name = file[1]
                 file_path = os.path.join(path, file_name)
+                print (file_path)
                 if os.path.exists(file_path) == False:
                     missing.append(file[0])
                 else:
                     stats = os.stat(file_path)
-                    if stats[1] != file[3]:
+                    if stats.st_ino != file[3]:
+                        print (stats.st_ino, file[3])
                         missing.append(file[0])
             i = 0
             while i < len(local_files):
                 if local_files[i].endswith('.desktop'):
-                    file_name = local_files[i][:-8]
-                else:
-                    file_name = local_files[i]
+                    i += 1
+                    continue
                 exist = self.query_local_file(path, name = file_name)
-                print (exist)
                 if exist == None:
                     file_name = local_files.pop(i)
                     parent = self.query_local_file(path)[0][4]
@@ -404,10 +404,11 @@ class GoogleDriveInstance():
                     i += 1
             i = 0
             while i < len(local_files):
+                if local_files[i].endswith('.desktop'):
+                    i += 1
+                    continue
                 stats = os.stat(os.path.join(path, local_files[i]))
-                print (local_files[i])
                 exist = self.query_local_file(path, inode = stats[1])
-                print (exist)
                 if exist == None:
                     file_name = local_files.pop(i)
                     parent = self.query_local_file(path)[0][4]
@@ -416,14 +417,41 @@ class GoogleDriveInstance():
                     new.append((path,file_name, parent,is_folder))
                 else:
                     i += 1
-            print ("local_files", local_files)
-            print ("missing",missing)
-            print ("new",new)
+        print ("missing", missing, "new", new)
         self.files_update(missing, new)
+        return
 
-                    
-            
-            
+    def files_update(self, missing, new):
+        for file_id in missing:
+            self.service.files().update(body = {'trashed':True}, fileId = file_id).execute()
+            self.database_cursor.execute(
+                    "DELETE FROM files WHERE fileId = ?", (file_id,))
+            self.index_database.commit()
+        if new != []:
+            id_list = self.service.files().generateIds(count = len(new)).execute()
+            for file_path, file_name, parent, is_folder in new:
+                newfile_id = id_list['ids'].pop()
+                if file_name.endswith('.desktop'): 
+                    name = file_name[:-8]
+                else:
+                    name = file_name
+                data = {'id':newfile_id, 'name':name, 'parents':[parent]}
+                path = os.path.join(file_path, file_name)
+                if is_folder:
+                    data['mimeType'] = 'application/vnd.google-apps.folder'
+                    self.service.files().create(body = data).execute()
+                    is_folder = 1
+                else:
+                    media = apiclient.http.MediaFileUpload(path, resumable = True)
+                    self.service.files().create(body = data, media_body = media).execute()
+                    is_folder = 0
+                inode = os.stat(path).st_ino
+                self.database_cursor.execute(
+                        "INSERT INTO files VALUES (?,?,?,?,?,?)", (newfile_id, name, file_path, inode, parent, is_folder))
+                self.index_database.commit()
+        response = self.service.changes().getStartPageToken().execute()
+        self.change_page_token = response.get('startPageToken')
+        self.update_configs()
 
         return
 
@@ -434,39 +462,8 @@ class GoogleDriveInstance():
     """
 
 
-    def files_update(self, missing, new):
-        for file_id in missing:
-            self.service.files().update(body = {'trashed':True}, fileId = file_id).execute()
-            self.database_cursor.execute(
-                    "DELETE FROM files WHERE fileId = ?", (file_id,))
-            self.index_database.commit()
-        if new == []:
-            return 
-        id_list = self.service.files().generateIds(count = len(new)).execute()
-        for file_path, file_name, parent, is_folder in new:
-            newfile_id = id_list['ids'].pop()
-            if file_name.endswith('.desktop'): 
-                name = file_name[:-8]
-            else:
-                name = file_name
-            data = {'id':newfile_id, 'name':name, 'parents':[parent]}
-            path = os.path.join(file_path, file_name)
-            if is_folder:
-                body['mimeType'] = 'application/vnd.google-apps.folder'
-                self.service.files().create(body = data).execute()
-                is_folder = 1
-            else:
-                media = apiclient.http.MediaFileUpload(path, resumable = True)
-                self.service.files().create(body = data, media_body = media).execute()
-                is_folder = 0
-            inode = os.stat(path).st_ino
-            self.database_cursor.execute(
-                    "INSERT INTO files VALUES (?,?,?,?,?,?)", (newfile_id, name, file_path, inode, parent, is_folder))
-            self.index_database.commit()
-        return
 
     def query_local_file(self, path, name = None, inode = None):
-        print ("name", name, "inode", inode)
         if name == None and inode == None:
             results = self.database_cursor.execute(
                     "SELECT * FROM files WHERE path =?", (path,))
@@ -643,9 +640,10 @@ if __name__ == '__main__':
     drive = GoogleDriveInstance(sys.argv)
     #results = drive.service.files().get(fileId='0B8lhn7ceZT9iZWN5LU50V0xFbWs', fields = "id, name, mimeType, parents").execute()
     #drive.download_folder(results,drive.local_path + '222')
-    #drive.detect_changes()
+    
+    drive.detect_changes()
     print ("============================")
-    drive.list_database_files()
+    #drive.list_database_files()
     print ("============================")
     drive.check_local_changes()
 #    print ([0,1][drive.is_folder(results)])
